@@ -1,0 +1,244 @@
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.interpolate import CubicSpline
+import warnings
+warnings.filterwarnings('ignore')
+import os
+ 
+os.makedirs('figures', exist_ok=True)
+ 
+f = np.array([100,120,145,170,200,235,270,310,355,405,
+              460,520,585,655,730,810,895,985,1080,1180,
+              1290,1410,1540,1680,1830,1990,2160,2340,2530,2730])
+Z = np.array([152.3,149.1,146.8,144.9,142.0,139.5,137.9,136.1,134.8,133.6,
+              132.7,131.9,131.4,131.1,130.9,131.0,131.3,131.9,132.7,133.8,
+              135.2,136.9,138.9,141.1,143.5,146.1,149.0,152.2,155.6,159.2])
+ 
+n = len(f)
+f_fine = np.linspace(f[0], f[-1], 2000)
+ 
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.plot(f, Z, 'o-', color='#1f77b4', ms=5, lw=1.5, label='Datos medidos')
+ax.axhline(130.9, color='gray', ls='--', lw=0.8)
+ax.axvline(730, color='gray', ls='--', lw=0.8)
+idx_min = np.argmin(Z)
+ax.plot(f[idx_min], Z[idx_min], 'r*', ms=14, label=f'Mínimo: f={f[idx_min]} Hz, |Z|={Z[idx_min]} Ω')
+ax.set_xlabel('Frecuencia f (Hz)', fontsize=12)
+ax.set_ylabel('|Z| (Ω)', fontsize=12)
+ax.set_title('Parte A — Magnitud de impedancia vs. frecuencia', fontsize=13)
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('figures/A_exploratorio.png', dpi=150)
+plt.close()
+ 
+def poly_matrix(x_nodes, y_nodes, degree):
+    A = np.vander(x_nodes, degree+1, increasing=False)
+    coeffs, _, _, _ = np.linalg.lstsq(A, y_nodes, rcond=None)
+    return coeffs
+ 
+def poly_eval(coeffs, x):
+    return np.polyval(coeffs, x)
+ 
+def lagrange_eval(x_nodes, y_nodes, x_eval):
+    n = len(x_nodes)
+    x_eval = np.atleast_1d(x_eval)
+    result = np.zeros(len(x_eval))
+    for i in range(n):
+        L = np.ones(len(x_eval))
+        for j in range(n):
+            if j != i:
+                L *= (x_eval - x_nodes[j]) / (x_nodes[i] - x_nodes[j])
+        result += y_nodes[i] * L
+    return result
+ 
+coeffs29 = poly_matrix(f, Z, 29)
+Z_poly29 = poly_eval(coeffs29, f_fine)
+ 
+def piecewise_poly(x_all, y_all, x_eval, npts):
+    result = np.full(len(x_eval), np.nan)
+    n = len(x_all)
+    step = max(npts-1, 1)
+    for start in range(0, n, step):
+        end = min(start+npts, n)
+        seg_x = x_all[start:end]
+        seg_y = y_all[start:end]
+        mask = (x_eval >= seg_x[0]) & (x_eval <= seg_x[-1])
+        if mask.any() and len(seg_x) > 1:
+            deg = len(seg_x)-1
+            coeffs = poly_matrix(seg_x, seg_y, deg)
+            result[mask] = poly_eval(coeffs, x_eval[mask])
+    return result
+ 
+Z_step5  = piecewise_poly(f, Z, f_fine, 6)
+Z_step10 = piecewise_poly(f, Z, f_fine, 11)
+Z_step15 = piecewise_poly(f, Z, f_fine, 16)
+ 
+fig, axes = plt.subplots(2, 1, figsize=(10, 9))
+ax = axes[0]
+ax.plot(f, Z, 'ko', ms=5, label='Datos', zorder=5)
+ax.plot(f_fine, Z_poly29, 'r-', lw=1.2, label='Grado 29 (Runge)')
+ax.set_ylim(125, 175)
+ax.set_xlabel('f (Hz)'); ax.set_ylabel('|Z| (Ω)')
+ax.set_title('B1 — Polinomio grado 29: oscilaciones de Runge')
+ax.legend(); ax.grid(True, alpha=0.3)
+ax = axes[1]
+ax.plot(f, Z, 'ko', ms=5, label='Datos', zorder=5)
+ax.plot(f_fine, Z_step5,  color='blue',   lw=1.5, label='Escalonado grado 5')
+ax.plot(f_fine, Z_step10, color='green',  lw=1.5, label='Escalonado grado 10')
+ax.plot(f_fine, Z_step15, color='orange', lw=1.5, label='Escalonado grado 15')
+ax.set_ylim(128, 165)
+ax.set_xlabel('f (Hz)'); ax.set_ylabel('|Z| (Ω)')
+ax.set_title('B1 — Polinomios escalonados vs. grado 29')
+ax.legend(); ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('figures/B1_polinomial.png', dpi=150)
+plt.close()
+ 
+target = 1000.0
+dists = np.abs(f - target)
+idx_near = np.sort(np.argsort(dists)[:6])
+f_near = f[idx_near]; Z_near = Z[idx_near]
+Z_lag_1000 = lagrange_eval(f_near, Z_near, target)[0]
+coeffs_near = poly_matrix(f_near, Z_near, 5)
+Z_mat_1000 = poly_eval(coeffs_near, target)
+ 
+print(f"Lagrange |Z|(1000) = {Z_lag_1000:.4f} Ω")
+print(f"Matricial |Z|(1000) = {Z_mat_1000:.4f} Ω")
+ 
+np.random.seed(42)
+loo_idx = np.random.choice(n, 5, replace=False)
+for i in loo_idx:
+    mask = np.ones(n, dtype=bool); mask[i] = False
+    Z_pred = piecewise_poly(f[mask], Z[mask], np.array([f[i]]), 6)[0]
+    err = abs(Z_pred - Z[i]) / abs(Z[i]) * 100
+    print(f"LOO f={f[i]} Hz: Z_real={Z[i]:.2f}, Z_pred={Z_pred:.2f}, err={err:.3f}%")
+ 
+cs = CubicSpline(f, Z, bc_type='natural')
+Z_spline = cs(f_fine)
+Z_spline_1000 = float(cs(1000.0))
+print(f"Spline |Z|(1000) = {Z_spline_1000:.4f} Ω")
+ 
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.plot(f, Z, 'ko', ms=5, label='Datos', zorder=5)
+ax.plot(f_fine, Z_spline, 'b-', lw=2, label='Spline cúbico natural')
+ax.plot(f_fine, Z_step5, 'g--', lw=1.5, label='Polinomio escalonado grado 5')
+ax.plot(1000, Z_spline_1000, 'r^', ms=10, label=f'Spline: |Z|(1000)={Z_spline_1000:.2f} Ω')
+ax.set_xlabel('f (Hz)'); ax.set_ylabel('|Z| (Ω)')
+ax.set_title('B2 — Spline cúbico natural vs. polinomio escalonado')
+ax.legend(); ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('figures/B2_spline.png', dpi=150)
+plt.close()
+ 
+dZ_df   = cs(f_fine, 1)
+d2Z_df2 = cs(f_fine, 2)
+ 
+sign_changes = np.where(np.diff(np.sign(dZ_df)))[0]
+f_min_list = []
+for sc in sign_changes:
+    f1, f2 = f_fine[sc], f_fine[sc+1]
+    d1, d2 = dZ_df[sc], dZ_df[sc+1]
+    f_zero = f1 - d1*(f2-f1)/(d2-d1)
+    f_min_list.append(f_zero)
+ 
+print(f"Mínimo en f = {f_min_list[0]:.2f} Hz")
+print(f"d²|Z|/df² en mínimo = {float(cs(f_min_list[0], 2)):.6f} Ω/Hz²")
+ 
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+ax1.plot(f_fine, dZ_df, 'b-', lw=1.5)
+ax1.axhline(0, color='k', lw=0.8, ls='--')
+ax1.axvline(f_min_list[0], color='r', lw=1.5, ls='--', label=f'Mínimo f={f_min_list[0]:.1f} Hz')
+ax1.set_ylabel('d|Z|/df (Ω/Hz)'); ax1.legend(); ax1.grid(True, alpha=0.3)
+ax1.set_title('Parte C — Primera derivada del spline cúbico')
+ax2.plot(f_fine, d2Z_df2, 'g-', lw=1.5)
+ax2.axhline(0, color='k', lw=0.8, ls='--')
+ax2.axvline(f_min_list[0], color='r', lw=1.5, ls='--', label=f'f={f_min_list[0]:.1f} Hz')
+ax2.set_xlabel('f (Hz)'); ax2.set_ylabel('d²|Z|/df² (Ω/Hz²)')
+ax2.legend(); ax2.grid(True, alpha=0.3)
+ax2.set_title('Segunda derivada del spline cúbico')
+plt.tight_layout()
+plt.savefig('figures/C_derivadas.png', dpi=150)
+plt.close()
+ 
+Z_th = 150.0
+g = lambda x: cs(x) - Z_th
+g_vals = g(f_fine)
+root_brackets = []
+for i in range(len(f_fine)-1):
+    if g_vals[i]*g_vals[i+1] < 0:
+        root_brackets.append((f_fine[i], f_fine[i+1]))
+ 
+def biseccion(g, a, b, tol=1e-6, max_iter=200):
+    fa = g(a)
+    hist = []
+    for _ in range(max_iter):
+        c = (a+b)/2.0
+        fc = g(c)
+        hist.append(abs(fc))
+        if abs(fc) < tol or (b-a)/2 < tol:
+            break
+        if fa*fc < 0: b = c
+        else: a, fa = c, fc
+    return c, hist
+ 
+def newton_raphson(g, x0, tol=1e-6, max_iter=100):
+    x = x0
+    hist = []
+    for _ in range(max_iter):
+        fx = g(x)
+        hist.append(abs(fx))
+        if abs(fx) < tol: break
+        dfx = float(cs(x, 1))
+        if dfx == 0: break
+        x = x - fx/dfx
+    return x, hist
+ 
+for a, b in root_brackets:
+    r_b, _ = biseccion(g, a, b)
+    r_n, _ = newton_raphson(g, (a+b)/2)
+    print(f"Bisección: {r_b:.4f} Hz | NR: {r_n:.4f} Hz | |Z|={float(cs(r_b)):.4f} Ω")
+ 
+root_2000 = None
+for a, b in root_brackets:
+    r_b, _ = biseccion(g, a, b)
+    if r_b > 1800:
+        root_2000 = r_b; break
+ 
+if root_2000:
+    df_dZ = 1.0 / float(cs(root_2000, 1))
+    print(f"Sensibilidad df/d|Z| en f={root_2000:.1f} Hz: {df_dZ:.4f} Hz/Ω")
+ 
+a0, b0 = root_brackets[-1]
+_, hist_b = biseccion(g, a0, b0)
+_, hist_n = newton_raphson(g, (a0+b0)/2)
+ 
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.semilogy(range(len(hist_b)), hist_b, 'b-o', ms=4, label='Bisección')
+ax.semilogy(range(len(hist_n)), hist_n, 'r-s', ms=4, label='Newton-Raphson')
+ax.set_xlabel('Iteración'); ax.set_ylabel('|g(x)|')
+ax.set_title('D — Convergencia: Bisección vs. Newton-Raphson')
+ax.legend(); ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('figures/D_convergencia.png', dpi=150)
+plt.close()
+ 
+fig, ax = plt.subplots(figsize=(9, 5))
+ax.plot(f, Z, 'ko', ms=5, label='Datos', zorder=5)
+ax.plot(f_fine, cs(f_fine), 'b-', lw=2, label='Spline cúbico')
+ax.axhline(Z_th, color='r', lw=1.5, ls='--', label=f'Z_th = {Z_th} Ω')
+for a, b in root_brackets:
+    r_b, _ = biseccion(g, a, b)
+    ax.axvline(r_b, color='green', lw=1.2, ls=':')
+    ax.plot(r_b, Z_th, 'g^', ms=10)
+    ax.annotate(f'f={r_b:.1f} Hz', xy=(r_b, Z_th), xytext=(r_b+80, Z_th+2), fontsize=8, color='green')
+ax.set_xlabel('f (Hz)'); ax.set_ylabel('|Z| (Ω)')
+ax.set_title('Parte D — Raíces de |Z|(f) = 150 Ω')
+ax.legend(); ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('figures/D_raices.png', dpi=150)
+plt.close()
+ 
+print("Figuras guardadas en ./figures/")
